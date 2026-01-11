@@ -217,24 +217,42 @@ class SimpleMonitor:
         if not any(indicator in message_text for indicator in ['VIP SIGNAL', '💳', '🔥', '⌛', 'CALL', 'PUT']):
             return None
         
-        # Extract Asset - try multiple patterns
+        # Extract Asset - preserve full format including OTC
         asset = None
-        asset_patterns = [
-            r'\*\*([A-Z]{6})-?OTC[p]?\*\*',  # **NZDUSD-OTC**
-            r'💳\s*([A-Z]{6})-?OTC[p]?',     # 💳 AUDCAD-OTC or AUDCAD-OTCp
-            r'💳\s*([A-Z]{6})\s',            # 💳 AUDCAD 
-            r'([A-Z]{6})-OTC[p]?',           # AUDCAD-OTC or AUDCAD-OTCp
-            r'�\s*([AA-Z]{3}[A-Z]{3})',      # � AUDCACD
-            r'📊\s*([A-Z]{6})-?OTC[p]?',     # 📊 AUDCAD-OTC
+        
+        # First try to match full OTC format patterns
+        otc_patterns = [
+            r'\*\*([A-Z]{6})-OTC[p]?\*\*',   # **GBPUSD-OTC** or **NZDUSD-OTCp**
+            r'💳\s*([A-Z]{6})-OTC[p]?',      # 💳 AUDCAD-OTC
+            r'([A-Z]{6})-OTC[p]?\s*-\s*(CALL|PUT)', # GBPUSD-OTC - PUT
+            r'([A-Z]{6})-OTC[p]?',           # AUDCAD-OTC
+            r'📊\s*([A-Z]{6})-OTC[p]?',      # 📊 AUDCAD-OTC
         ]
         
-        for pattern in asset_patterns:
+        # Check for OTC format first
+        for pattern in otc_patterns:
             asset_match = re.search(pattern, message_text, re.IGNORECASE)
             if asset_match:
-                asset = asset_match.group(1).upper()
-                # Ensure it's 6 characters (currency pair)
-                if len(asset) == 6:
+                base_asset = asset_match.group(1).upper()
+                if len(base_asset) == 6:  # Ensure it's a valid currency pair
+                    asset = f"{base_asset}_otc"  # Convert GBPUSD to GBPUSD_otc
                     break
+        
+        # If no OTC format found, try regular patterns
+        if not asset:
+            regular_patterns = [
+                r'\*\*([A-Z]{6})\*\*',           # **GBPUSD**
+                r'💳\s*([A-Z]{6})\s',            # 💳 AUDCAD 
+                r'📊\s*([A-Z]{6})',              # 📊 AUDCAD
+            ]
+            
+            for pattern in regular_patterns:
+                asset_match = re.search(pattern, message_text, re.IGNORECASE)
+                if asset_match:
+                    asset = asset_match.group(1).upper()
+                    # Ensure it's 6 characters (currency pair)
+                    if len(asset) == 6:
+                        break
         
         if not asset:
             return None
@@ -291,6 +309,9 @@ class SimpleMonitor:
                     asset = signal_data['asset']
                     direction = signal_data['direction']
                     signal_time = signal_data['signal_time'] or ''
+                    
+                    # Debug logging for signal data
+                    print(f"   💾 Saving signal: {asset} {direction} at {signal_time}")
                 else:
                     is_signal = 'No'
                     asset = ''
