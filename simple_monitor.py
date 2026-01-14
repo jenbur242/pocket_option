@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Simple Monitor - Fetch messages from Telegram channel and save to CSV
+Simple Monitor - Fetch messages from Telegram channels and save to CSV
+Updated with improved LC Trader pattern recognition
 """
 import asyncio
 import logging
@@ -27,21 +28,36 @@ class SimpleMonitor:
         # Initialize clients
         self.telegram_client = None
         
-        # New channel to monitor
+        # Channels to monitor
         self.channels = [
             {
                 'id': 'https://t.me/+ZuCrnz2Yv99lNTg5',
                 'name': 'james martin vip channel m1',
                 'entity': None,
                 'last_msg_id': None
-            }
+            },
+            # SECOND CHANNEL COMMENTED OUT
+            # {
+            #     'id': 'https://t.me/luctrader09',
+            #     'name': 'lc trader',
+            #     'entity': None,
+            #     'last_msg_id': None
+            # }
         ]
         
-        # CSV file setup
+        # CSV file setup - separate file for each channel
         today = datetime.now().strftime('%Y%m%d')
-        self.csv_file = f"/Users/raushankumar/Downloads/PocketOptionAPI/pocketoption_messages_{today}.csv"
+        self.csv_files = {}
         
-        # Ensure CSV has headers
+        # Create CSV file for each channel
+        for channel in self.channels:
+            # Create safe filename from channel name
+            safe_name = re.sub(r'[^\w\s-]', '', channel['name']).strip()
+            safe_name = re.sub(r'[-\s]+', '_', safe_name).lower()
+            csv_filename = f"pocketoption_{safe_name}_{today}.csv"
+            self.csv_files[channel['name']] = csv_filename
+        
+        # Ensure all CSV files have headers
         self.ensure_csv_headers()
         
         self.current_channel = 0
@@ -54,51 +70,133 @@ class SimpleMonitor:
         self.last_status_time = None
     
     def ensure_csv_headers(self):
-        """Ensure CSV file exists with proper headers"""
+        """Ensure CSV files exist with proper headers for each channel"""
         headers = [
             'timestamp', 'channel', 'message_id', 'message_text', 
             'is_signal', 'asset', 'direction', 'signal_time'
         ]
         
-        # Create directory if it doesn't exist
-        os.makedirs(os.path.dirname(self.csv_file), exist_ok=True)
+        for channel_name, csv_file in self.csv_files.items():
+            # Create directory only if the file path contains a directory
+            csv_dir = os.path.dirname(csv_file)
+            if csv_dir:  # Only create directory if there's actually a directory path
+                os.makedirs(csv_dir, exist_ok=True)
+            
+            # Check if file exists and has headers
+            if not os.path.exists(csv_file):
+                with open(csv_file, 'w', newline='', encoding='utf-8') as f:
+                    writer = csv.writer(f)
+                    writer.writerow(headers)
+                print(f"📄 Created CSV file for {channel_name}: {csv_file}")
+            else:
+                print(f"📄 Using existing CSV file for {channel_name}: {csv_file}")
+    
+    async def fetch_last_message_pattern(self, channel):
+        """Fetch the last 10 messages from channel to learn pattern"""
+        if not channel['entity']:
+            return None
         
-        # Check if file exists and has headers
-        if not os.path.exists(self.csv_file):
-            with open(self.csv_file, 'w', newline='', encoding='utf-8') as f:
-                writer = csv.writer(f)
-                writer.writerow(headers)
-            print(f"📄 Created CSV file: {self.csv_file}")
-        else:
-            print(f"📄 Using existing CSV file: {self.csv_file}")
+        try:
+            # Get the last 10 messages to analyze patterns
+            messages = await self.telegram_client.get_messages(channel['entity'], limit=10)
+            
+            if not messages:
+                print(f"   📭 No messages found in {channel['name']}")
+                return None
+            
+            print(f"\n🔍 ANALYZING LAST 10 MESSAGES for {channel['name']}:")
+            print("-" * 60)
+            
+            patterns_found = []
+            
+            for i, msg in enumerate(messages):
+                if msg.text:
+                    print(f"📨 Message {i+1} (ID: {msg.id}):")
+                    print(f"   📝 Text: {msg.text[:200]}...")
+                    
+                    # Analyze for signal patterns
+                    signal_data = self.extract_signal_data(msg.text, channel['name'])
+                    if signal_data:
+                        print(f"   🎯 SIGNAL DETECTED:")
+                        print(f"      💰 Asset: {signal_data['asset']}")
+                        print(f"      📊 Direction: {signal_data['direction']}")
+                        print(f"      ⏰ Time: {signal_data['signal_time'] or 'Not specified'}")
+                        patterns_found.append(signal_data)
+                    else:
+                        # Check for other patterns
+                        text_lower = msg.text.lower()
+                        if any(word in text_lower for word in ['win', 'result', '✅']):
+                            print(f"   📊 RESULT MESSAGE detected")
+                        elif any(word in text_lower for word in ['register', 'bonus', 'join']):
+                            print(f"   📢 PROMOTIONAL MESSAGE detected")
+                        else:
+                            print(f"   📝 REGULAR MESSAGE")
+                    
+                    print()
+            
+            if patterns_found:
+                print(f"✅ Found {len(patterns_found)} signal patterns in last 10 messages from {channel['name']}")
+            else:
+                print(f"ℹ️ No signal patterns found in last 10 messages from {channel['name']}")
+            
+            print("-" * 60)
+            return patterns_found
+            
+        except Exception as e:
+            print(f"❌ Error fetching patterns from {channel['name']}: {e}")
+            return None
     
     async def initialize(self):
-        """Initialize clients with session check and authentication"""
+        """Initialize clients with session reuse and authentication"""
         try:
             print("🔌 Initializing Telegram connection...")
             
-            # Clean any existing session files first to avoid database locks
-            session_files = ['working_session.session', 'working_session.session-journal', 'working_session.session-wal']
-            for session_file in session_files:
-                if os.path.exists(session_file):
-                    try:
-                        os.remove(session_file)
-                        print(f"🧹 Cleaned: {session_file}")
-                    except Exception as e:
-                        print(f"⚠️ Could not remove {session_file}: {e}")
+            # Create Telegram client (reuse existing session if available)
+            self.telegram_client = TelegramClient('monitor_session', self.api_id, self.api_hash)
             
-            # Create fresh Telegram client
-            self.telegram_client = TelegramClient('working_session', self.api_id, self.api_hash)
+            # Check if session exists
+            session_exists = os.path.exists('monitor_session.session')
             
-            print("📱 Creating fresh session...")
-            await self.authenticate_new_session()
+            if session_exists:
+                print("📱 Using existing session...")
+                try:
+                    await self.telegram_client.start(phone=self.phone)
+                    
+                    # Test if session is still valid
+                    me = await self.telegram_client.get_me()
+                    print(f"✅ Session valid - Logged in as: {me.first_name} ({me.phone})")
+                    
+                except Exception as session_error:
+                    print(f"⚠️ Existing session invalid: {session_error}")
+                    print("🔄 Creating new session...")
+                    
+                    # Clean invalid session files
+                    session_files = ['monitor_session.session', 'monitor_session.session-journal', 'monitor_session.session-wal']
+                    for session_file in session_files:
+                        if os.path.exists(session_file):
+                            try:
+                                os.remove(session_file)
+                                print(f"🧹 Cleaned: {session_file}")
+                            except Exception as e:
+                                print(f"⚠️ Could not remove {session_file}: {e}")
+                    
+                    # Recreate client and authenticate
+                    self.telegram_client = TelegramClient('monitor_session', self.api_id, self.api_hash)
+                    await self.authenticate_new_session()
+                    
+                    # Test new connection
+                    me = await self.telegram_client.get_me()
+                    print(f"✅ New session created - Logged in as: {me.first_name} ({me.phone})")
+            else:
+                print("📱 No existing session found - Creating new session...")
+                await self.authenticate_new_session()
+                
+                # Test connection
+                me = await self.telegram_client.get_me()
+                print(f"✅ New session created - Logged in as: {me.first_name} ({me.phone})")
             
-            # Test connection
-            me = await self.telegram_client.get_me()
-            print(f"✅ Logged in as: {me.first_name} ({me.phone})")
-            
-            # Get entities for all channels
-            print("📡 Connecting to channels...")
+            # Get entities for all channels and analyze patterns
+            print("📡 Connecting to channels and analyzing patterns...")
             for channel in self.channels:
                 try:
                     # Handle invite link
@@ -128,6 +226,9 @@ class SimpleMonitor:
                         channel['last_msg_id'] = messages[0].id
                     
                     print(f"✅ {channel['name']}: Connected")
+                    
+                    # Analyze message patterns from this channel (last 10 messages)
+                    await self.fetch_last_message_pattern(channel)
                     
                 except Exception as e:
                     print(f"❌ {channel['name']}: Failed to connect - {e}")
@@ -200,12 +301,44 @@ class SimpleMonitor:
             print(f"❌ 2FA error: {e}")
             return False
     
-    
-    def extract_signal_data(self, message_text):
-        """Extract signal data from message"""
+    def extract_signal_data(self, message_text, channel_name):
+        """Extract signal data from message based on channel type"""
         if not message_text:
             return None
         
+        # LC Trader channel pattern
+        if 'lc trader' in channel_name.lower():
+            return self.extract_lc_trader_signal(message_text)
+        
+        # James Martin VIP channel pattern (original)
+        return self.extract_james_martin_signal(message_text)
+    
+    def extract_lc_trader_signal(self, message_text):
+        """Extract signal data from LC Trader message format"""
+        # Check for LC Trader signal pattern: "OPPORTUNITY FOUND"
+        if "OPPORTUNITY FOUND" not in message_text:
+            return None
+        
+        # Pattern: ASSET_otc—TIME: DIRECTION
+        # Example: CHFJPY_otc—05:00: PUT 🔴
+        signal_pattern = r'([A-Z]{6})_otc—(\d{2}:\d{2}):\s*(PUT|CALL)'
+        
+        match = re.search(signal_pattern, message_text, re.IGNORECASE)
+        if not match:
+            return None
+        
+        asset = match.group(1).upper() + "_otc"  # CHFJPY_otc
+        signal_time = match.group(2)  # 05:00
+        direction = match.group(3).lower()  # put or call
+        
+        return {
+            'asset': asset,
+            'direction': direction,
+            'signal_time': signal_time
+        }
+    
+    def extract_james_martin_signal(self, message_text):
+        """Extract signal data from James Martin VIP channel format"""
         # Skip obvious non-signal messages
         skip_words = ['win', 'loss', '💔', '✅', 'register', 'code', 'bonus', 'join', 'channel', 'withdraw', 'verify', 'account']
         if any(skip_word in message_text.lower() for skip_word in skip_words):
@@ -266,7 +399,7 @@ class SimpleMonitor:
             r'⌛\s*(\d{1,2}:\d{2}:\d{2})',      # ⌛ 12:25:00
             r'⌛\s*(\d{1,2}:\d{2})',           # ⌛ 12:25
             r'⏰\s*(\d{1,2}:\d{2})',           # ⏰ 12:25
-            r'-\s*(\d{1,2}:\d{2})\s*$',        # - 21:32 at end
+            r'-\s*(\d{1,2}:\d{2})$',           # - 21:32 at end
             r'(\d{1,2}:\d{2})\s*•',            # 21:32 •
         ]
         
@@ -293,16 +426,22 @@ class SimpleMonitor:
         }
     
     def save_to_csv(self, channel, message, signal_data=None):
-        """Save message to CSV file"""
+        """Save message to channel-specific CSV file"""
         try:
-            with open(self.csv_file, 'a', newline='', encoding='utf-8') as f:
+            # Get the CSV file for this channel
+            csv_file = self.csv_files.get(channel['name'])
+            if not csv_file:
+                print(f"❌ No CSV file found for channel: {channel['name']}")
+                return False
+            
+            with open(csv_file, 'a', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
                 
                 # Prepare row data
                 timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 channel_name = channel['name']
                 message_id = message.id
-                message_text = message.text.replace('\n', ' ').replace('\r', ' ')
+                message_text = message.text.replace('\n', ' ').replace('\r', ' ') if message.text else ''
                 
                 if signal_data:
                     is_signal = 'Yes'
@@ -311,7 +450,7 @@ class SimpleMonitor:
                     signal_time = signal_data['signal_time'] or ''
                     
                     # Debug logging for signal data
-                    print(f"   💾 Saving signal: {asset} {direction} at {signal_time}")
+                    print(f"   💾 Saving signal to {csv_file}: {asset} {direction} at {signal_time}")
                 else:
                     is_signal = 'No'
                     asset = ''
@@ -358,8 +497,8 @@ class SimpleMonitor:
                     print(f"\n🔔 [{time_str}] NEW MESSAGE from {channel['name']}:")
                     print(f"   📝 {message_preview}")
                     
-                    # Check if it's a signal with detailed analysis
-                    signal_data = self.extract_signal_data(msg.text)
+                    # Check if it's a signal with detailed analysis (pass channel name)
+                    signal_data = self.extract_signal_data(msg.text, channel['name'])
                     
                     # Save to CSV
                     saved = self.save_to_csv(channel, msg, signal_data)
@@ -377,14 +516,26 @@ class SimpleMonitor:
                         print(f"   🚨 READY FOR TRADING!")
                     else:
                         # Check if it's a result message
-                        if any(word in msg.text.lower() for word in ['win', 'result', '✅', 'confirmed']):
+                        if any(word in msg.text.lower() for word in ['win', 'result', '✅', 'confirmed', 'victory', 'gain']):
                             save_status = "📊 RESULT SAVED" if saved else "❌ SAVE FAILED"
                             print(f"   📊 RESULT MESSAGE: {save_status}")
                         else:
                             save_status = "📝 MESSAGE SAVED" if saved else "❌ SAVE FAILED"
                             print(f"   📝 Status: {save_status}")
                     
-                    print(f"   📄 CSV: {self.csv_file}")
+                    # Show which CSV file was used
+                    csv_file = self.csv_files.get(channel['name'], 'Unknown')
+                    print(f"   📄 CSV: {csv_file}")
+                    print("-" * 60)
+                else:
+                    # Media message
+                    saved = self.save_to_csv(channel, msg, None)
+                    time_str = datetime.now().strftime('%H:%M:%S')
+                    print(f"\n🔔 [{time_str}] NEW MEDIA MESSAGE from {channel['name']}")
+                    save_status = "📷 MEDIA SAVED" if saved else "❌ SAVE FAILED"
+                    print(f"   📷 Status: {save_status}")
+                    csv_file = self.csv_files.get(channel['name'], 'Unknown')
+                    print(f"   📄 CSV: {csv_file}")
                     print("-" * 60)
             
             # Show monitoring status every 30 seconds if no new messages
@@ -411,7 +562,7 @@ class SimpleMonitor:
                     await asyncio.sleep(2)
                     
                     # Clean session files
-                    session_files = ['working_session.session', 'working_session.session-journal', 'working_session.session-wal']
+                    session_files = ['monitor_session.session', 'monitor_session.session-journal', 'monitor_session.session-wal']
                     for session_file in session_files:
                         if os.path.exists(session_file):
                             try:
@@ -420,7 +571,7 @@ class SimpleMonitor:
                                 pass
                     
                     # Recreate client
-                    self.telegram_client = TelegramClient('working_session', self.api_id, self.api_hash)
+                    self.telegram_client = TelegramClient('monitor_session', self.api_id, self.api_hash)
                     await self.authenticate_new_session()
                     
                     # Reconnect to channels
@@ -471,7 +622,9 @@ class SimpleMonitor:
     async def start_monitoring(self):
         """Start real-time signal monitoring"""
         print("🚀 REAL-TIME SIGNAL MONITOR STARTING...")
-        print(f"📄 CSV File: {self.csv_file}")
+        print(f"📄 CSV Files: Separate file for each channel")
+        for channel_name, csv_file in self.csv_files.items():
+            print(f"   📊 {channel_name}: {csv_file}")
         print("⚡ Monitoring: Every 1 second")
         print("🎯 Detection: Trading signals + Results")
         print("📊 Format: [time] NEW MESSAGE details")
@@ -502,7 +655,7 @@ class SimpleMonitor:
                 channel = self.channels[self.current_channel]
                 await self.check_channel(channel)
                 
-                # Move to next channel (only one channel now, but keeping structure)
+                # Move to next channel
                 self.current_channel = (self.current_channel + 1) % len(self.channels)
                 
                 # Wait 1 second for real-time monitoring
@@ -520,7 +673,9 @@ class SimpleMonitor:
             print(f"   ⏰ Duration: {duration_minutes}m {duration_seconds}s")
             print(f"   📨 Messages Processed: {self.messages_processed}")
             print(f"   🎯 Signals Detected: {self.signals_detected}")
-            print(f"   📄 CSV File: {self.csv_file}")
+            print(f"   📄 CSV Files:")
+            for channel_name, csv_file in self.csv_files.items():
+                print(f"      📊 {channel_name}: {csv_file}")
             print("📊 Session completed successfully")
         except Exception as e:
             print(f"\n❌ Monitor error: {e}")
