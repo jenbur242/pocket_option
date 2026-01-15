@@ -1,0 +1,39 @@
+# Environment variables and sensitive data
+.env
+*.session
+*.session-journal
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environment
+venv/
+env/
+ENV/
+
+# Backup folders
+backup_*/
+
+# Test results and reports
+*_test_report_*.txt
+*_test_results_*.csv
+regular_assets_test_*.txt
+
+# Temporary files
+*.tmp
+*.log
+.target_channel_id
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
