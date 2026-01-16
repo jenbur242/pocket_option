@@ -46,19 +46,12 @@ class SimpleMonitor:
         ]
         
         # CSV file setup - separate file for each channel
-        today = datetime.now().strftime('%Y%m%d')
+        # Will be updated dynamically when date changes
         self.csv_files = {}
+        self.current_date = None  # Track current date for automatic updates
         
-        # Create CSV file for each channel
-        for channel in self.channels:
-            # Create safe filename from channel name
-            safe_name = re.sub(r'[^\w\s-]', '', channel['name']).strip()
-            safe_name = re.sub(r'[-\s]+', '_', safe_name).lower()
-            csv_filename = f"pocketoption_{safe_name}_{today}.csv"
-            self.csv_files[channel['name']] = csv_filename
-        
-        # Ensure all CSV files have headers
-        self.ensure_csv_headers()
+        # Initialize CSV files for today
+        self.update_csv_files_for_date()
         
         self.current_channel = 0
         self.running = False
@@ -68,6 +61,34 @@ class SimpleMonitor:
         self.signals_detected = 0
         self.messages_processed = 0
         self.last_status_time = None
+    
+    def update_csv_files_for_date(self):
+        """Update CSV filenames based on current date"""
+        today = datetime.now().strftime('%Y%m%d')
+        
+        # Check if date has changed
+        if self.current_date != today:
+            old_date = self.current_date
+            self.current_date = today
+            
+            # Create CSV file for each channel with new date
+            for channel in self.channels:
+                # Create safe filename from channel name
+                safe_name = re.sub(r'[^\w\s-]', '', channel['name']).strip()
+                safe_name = re.sub(r'[-\s]+', '_', safe_name).lower()
+                csv_filename = f"pocketoption_{safe_name}_{today}.csv"
+                self.csv_files[channel['name']] = csv_filename
+            
+            # Ensure all CSV files have headers
+            self.ensure_csv_headers()
+            
+            # Log the date change
+            if old_date:
+                print(f"\n📅 DATE CHANGED: {old_date} → {today}")
+                print(f"📄 NEW CSV FILES CREATED:")
+                for channel_name, csv_file in self.csv_files.items():
+                    print(f"   📊 {channel_name}: {csv_file}")
+                print("-" * 60)
     
     def ensure_csv_headers(self):
         """Ensure CSV files exist with proper headers for each channel"""
@@ -651,6 +672,9 @@ class SimpleMonitor:
         
         try:
             while self.running:
+                # Check if date has changed and update CSV files if needed
+                self.update_csv_files_for_date()
+                
                 # Check current channel
                 channel = self.channels[self.current_channel]
                 await self.check_channel(channel)
