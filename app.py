@@ -185,9 +185,11 @@ class MultiAssetPreciseTrader:
         self.trade_offset_seconds = self._load_trade_offset()
         
         # Use date-based CSV filename - support both channels
-        today = datetime.now().strftime('%Y%m%d')
-        self.james_martin_csv = f"pocketoption_james_martin_vip_channel_m1_{today}.csv"
-        self.lc_trader_csv = f"pocketoption_lc_trader_{today}.csv"
+        # Will be auto-updated to find latest available CSV
+        self.james_martin_csv = None
+        self.lc_trader_csv = None
+        self.current_csv_date = None
+        self._update_csv_filenames()
         
         # Channel selection and trade duration settings
         self.active_channel = None  # Will be set by user
@@ -273,6 +275,66 @@ class MultiAssetPreciseTrader:
         except Exception as e:
             print(f"⚠️ Error loading config: {e}, using default offset: {default_offset}s")
             return default_offset
+    
+    def _update_csv_filenames(self):
+        """Automatically find and use the latest CSV files for each channel"""
+        import glob
+        
+        today = datetime.now().strftime('%Y%m%d')
+        
+        # Check if we need to update (date changed or first run)
+        if self.current_csv_date == today and self.james_martin_csv and self.lc_trader_csv:
+            return  # Already up to date
+        
+        old_date = self.current_csv_date
+        self.current_csv_date = today
+        
+        # Find James Martin CSV files
+        james_pattern = "pocketoption_james_martin_vip_channel_m1_*.csv"
+        james_files = glob.glob(james_pattern)
+        
+        if james_files:
+            # Sort by date (newest first) and use the latest
+            james_files.sort(reverse=True)
+            self.james_martin_csv = james_files[0]
+            
+            # Check if today's file exists, if not use latest available
+            today_james = f"pocketoption_james_martin_vip_channel_m1_{today}.csv"
+            if today_james in james_files:
+                self.james_martin_csv = today_james
+        else:
+            # No files found, use today's date (will be created by monitor)
+            self.james_martin_csv = f"pocketoption_james_martin_vip_channel_m1_{today}.csv"
+        
+        # Find LC Trader CSV files
+        lc_pattern = "pocketoption_lc_trader_*.csv"
+        lc_files = glob.glob(lc_pattern)
+        
+        if lc_files:
+            # Sort by date (newest first) and use the latest
+            lc_files.sort(reverse=True)
+            self.lc_trader_csv = lc_files[0]
+            
+            # Check if today's file exists, if not use latest available
+            today_lc = f"pocketoption_lc_trader_{today}.csv"
+            if today_lc in lc_files:
+                self.lc_trader_csv = today_lc
+        else:
+            # No files found, use today's date (will be created by monitor)
+            self.lc_trader_csv = f"pocketoption_lc_trader_{today}.csv"
+        
+        # Log the update
+        if old_date and old_date != today:
+            print(f"\n📅 DATE CHANGED: {old_date} → {today}")
+            print(f"📄 CSV FILES UPDATED:")
+            print(f"   📊 James Martin: {self.james_martin_csv}")
+            print(f"   📊 LC Trader: {self.lc_trader_csv}")
+            print("-" * 60)
+        elif not old_date:
+            # First run
+            print(f"📄 CSV FILES DETECTED:")
+            print(f"   📊 James Martin: {self.james_martin_csv}")
+            print(f"   📊 LC Trader: {self.lc_trader_csv}")
     
     def _validate_duration(self, duration: int, channel: str = None) -> int:
         """Ensure duration matches channel requirements"""
@@ -394,6 +456,9 @@ class MultiAssetPreciseTrader:
     def get_signals_from_csv(self) -> List[Dict[str, Any]]:
         """Get trading signals from selected channel CSV file"""
         try:
+            # Update CSV filenames in case date has changed
+            self._update_csv_filenames()
+            
             # Determine which CSV file to use based on active channel
             if self.active_channel == "james_martin":
                 csv_file = self.james_martin_csv
